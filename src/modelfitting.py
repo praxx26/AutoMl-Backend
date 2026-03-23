@@ -69,8 +69,6 @@ def process_model(name, model, param_grid,
         if "min_samples_leaf" in new_params:
             new_params["min_samples_leaf"] = [2, 4]
 
-        if "n_estimators" in new_params:
-            new_params["n_estimators"] = [50, 100]
 
         if "C" in new_params:
             new_params["C"] = [0.001, 0.01, 0.1]
@@ -96,8 +94,7 @@ def process_model(name, model, param_grid,
         if "min_samples_leaf" in new_params:
             new_params["min_samples_leaf"] = [1]
 
-        if "n_estimators" in new_params:
-            new_params["n_estimators"] = [200, 300, 500]
+        
 
     
         if "C" in new_params:
@@ -169,7 +166,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
         models = {
             "Logistic Regression": (
                 LogisticRegression(max_iter=2000),
-                {"C": [0.01, 0.1, 1, 10], "solver": ["lbfgs", "liblinear"]}
+                {"C": [0.01, 0.1, 1, 10], "solver": ["lbfgs"]}
             ),
 
             "KNN": (
@@ -180,7 +177,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
             "Random Forest": (
                 RandomForestClassifier(random_state=42),
                 {
-                    "n_estimators": [100, 200],
+                    "n_estimators": [50],
                     "max_depth": [None, 10, 20]
                 }
             ),
@@ -188,7 +185,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
             "Gradient Boosting": (
                 GradientBoostingClassifier(),
                 {
-                    "n_estimators": [100, 200],
+                    "n_estimators": [50],
                     "learning_rate": [0.01, 0.1]
                 }
             ),
@@ -214,7 +211,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
             "Random Forest": (
                 RandomForestRegressor(random_state=42),
                 {
-                    "n_estimators": [100, 200],
+                    "n_estimators": [50],
                     "max_depth": [None, 10]
                 }
             ),
@@ -222,7 +219,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
             "Gradient Boosting": (
                 GradientBoostingRegressor(),
                 {
-                    "n_estimators": [100, 200],
+                    "n_estimators": [50],
                     "learning_rate": [0.01, 0.1]
                 }
             ),
@@ -233,11 +230,11 @@ def train_best_model(X_train, X_test, y_train, y_test):
             )
         }
 
-    results = Parallel(n_jobs=-1)(
+    results = Parallel(n_jobs=1)(
         delayed(process_model)(
             name, model, params,
             X_train, X_test, y_train, y_test,
-            task, cv_splits=3, n_iter=20
+            task, cv_splits=3, n_iter=5
         )
         for name, (model, params) in models.items()
     )
