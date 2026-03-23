@@ -1,0 +1,95 @@
+# =========================
+# Python cache files
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Virtual Environments
+# =========================
+venv/
+env/
+ENV/
+.venv/
+
+# =========================
+# VS Code settings
+# =========================
+.vscode/
+
+# =========================
+# Jupyter Notebook
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# System files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Build / Distribution
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Environment variables
+# =========================
+.env
+
+# =========================
+# Test / Coverage
+# =========================
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# =========================
+# ML Models (IMPORTANT)
+# =========================
+models/*.pkl
+models/*.joblib
+
+# =========================
+# Database files (if any)
+# =========================
+*.sqlite3
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.bak
+*.swp
+
+# =========================
+# Node (if React frontend inside project)
+# =========================
+node_modules/
+
+# =========================
+# Mac/Linux hidden files
+# =========================
+*.swp
+*.swo
+
+# =========================
+# IDEs (extra safety)
+# =========================
+.idea/
+
+# Dataset
+data/
+
+history/
