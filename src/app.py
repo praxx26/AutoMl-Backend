@@ -114,6 +114,30 @@ def preview_target():
 
     try:
         tmp_file = tempfile.NamedTemporaryFile(delete=False)
+        tmp_path = tmp_file.name
+        tmp_file.close()  # 🔥 FIX
+
+        s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_path)
+        df = pd.read_csv(tmp_path, encoding="latin1")
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    if target not in df.columns:
+        return jsonify({"error": "Invalid target"}), 400
+
+    preview = df[target].head(10).tolist()
+
+    return jsonify({"preview": preview})
+    data = request.get_json()
+    target = data.get("target")
+    dataset_id = data.get("dataset_id")
+
+    if not dataset_id:
+        return jsonify({"error": "dataset_id required"}), 400
+
+    try:
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
         s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
         df = pd.read_csv(tmp_file.name, encoding="latin1")
     except Exception as e:
@@ -132,6 +156,78 @@ def preview_target():
 # ---------------- TRAIN (DISABLED) ----------------
 @app.route("/train", methods=["POST"])
 def train_model():
+    data = request.get_json()
+    target = data.get("target")
+    dataset_id = data.get("dataset_id")
+
+    if not target or not dataset_id:
+        return jsonify({"error": "target and dataset_id required"}), 400
+
+    try:
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
+        tmp_path = tmp_file.name
+        tmp_file.close()  # 🔥 FIX
+
+        s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_path)
+        df = pd.read_csv(tmp_path, encoding="latin1")
+
+    except Exception as e:
+        return jsonify({"error": f"Dataset load failed: {str(e)}"}), 500
+
+    if target not in df.columns:
+        return jsonify({"error": "Invalid target column"}), 400
+
+    # 🔥 SAFETY ONLY (no logic change)
+    if len(df) > 2000:
+        df = df.sample(1000, random_state=42)
+
+    # ---------------- ORIGINAL LOGIC ----------------
+    X_train, X_test, y_train, y_test, meta = preprocess(df, target)
+
+    result = train_best_model(X_train, X_test, y_train, y_test)
+
+    model = result["model"]
+    results = result["all_results"]
+    best_model_name = result["best_model_name"]
+    best_params = result["best_params"]
+
+    leaderboard = sorted(results, key=lambda x: x["test_score"], reverse=True)
+
+    clean_leaderboard = []
+    for r in leaderboard:
+        clean_leaderboard.append({
+            "model": r["name"],
+            "train_score": float(r["train_score"]),
+            "test_score": float(r["test_score"]),
+            "cv_score": float(r["cv_score"]),
+            "params": r["params"],
+            "fit_status": r["fit_status"]
+        })
+
+    model_id = str(uuid.uuid4())
+
+    try:
+        # Save model
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_model:
+            joblib.dump(model, tmp_model.name)
+            s3.upload_file(tmp_model.name, BUCKET_NAME, f"models/{model_id}.pkl")
+
+        # Save meta
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_meta:
+            joblib.dump(meta, tmp_meta.name)
+            s3.upload_file(tmp_meta.name, BUCKET_NAME, f"models/{model_id}_meta.pkl")
+
+    except Exception as e:
+        return jsonify({"error": f"S3 upload failed: {str(e)}"}), 500
+
+    return jsonify({
+        "message": "Model trained successfully",
+        "model_id": model_id,
+        "best_model": best_model_name,
+        "best_params": best_params,
+        "leaderboard": clean_leaderboard,
+        "features": meta["columns"]
+    })
     return jsonify({
         "message": "❌ Training disabled on server. Train locally and upload model to S3."
     }), 400
