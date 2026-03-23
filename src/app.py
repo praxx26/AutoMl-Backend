@@ -24,6 +24,10 @@ AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
 BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 
+print("AWS KEY:", AWS_ACCESS_KEY)
+print("AWS REGION:", AWS_REGION)
+print("BUCKET:", BUCKET_NAME)
+
 s3 = boto3.client(
     "s3",
     aws_access_key_id=AWS_ACCESS_KEY,
@@ -36,29 +40,50 @@ s3 = boto3.client(
 def home():
     return "AutoML API is working 🚀"
 
-# ---------------- UPLOAD DATASET ----------------
+
+# ---------------- TEST S3 ----------------
+@app.route("/test-s3")
+def test_s3():
+    try:
+        buckets = s3.list_buckets()
+        return jsonify({
+            "message": "✅ AWS Working",
+            "buckets": [b["Name"] for b in buckets["Buckets"]]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------- UPLOAD ----------------
 @app.route("/upload", methods=["POST"])
 def upload_file():
+    print("🔥 Upload API hit")
+
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files['file']
+    print("📁 File:", file.filename)
 
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
     dataset_id = str(uuid.uuid4())
-    filename = f"datasets/{dataset_id}.csv"
+    s3_key = f"datasets/{dataset_id}.csv"
 
-    # Save temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-        file.save(tmp.name)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            file.save(tmp.name)
 
-        # Upload to S3
-        s3.upload_file(tmp.name, BUCKET_NAME, filename)
+            print("⬆️ Uploading to S3...")
+            s3.upload_file(tmp.name, BUCKET_NAME, s3_key)
+            print("✅ Uploaded to S3")
 
-        # Read preview
-        df = pd.read_csv(tmp.name, encoding="latin1")
+            df = pd.read_csv(tmp.name, encoding="latin1")
+
+    except Exception as e:
+        print("❌ S3 ERROR:", str(e))
+        return jsonify({"error": str(e)}), 500
 
     preview = {
         "columns": list(df.columns),
@@ -72,6 +97,7 @@ def upload_file():
         "preview": preview
     })
 
+
 # ---------------- TARGET PREVIEW ----------------
 @app.route("/preview-target", methods=["POST"])
 def preview_target():
@@ -82,9 +108,8 @@ def preview_target():
     if not dataset_id:
         return jsonify({"error": "dataset_id required"}), 400
 
-    tmp_file = tempfile.NamedTemporaryFile(delete=False)
-
     try:
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
         s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
         df = pd.read_csv(tmp_file.name, encoding="latin1")
     except Exception as e:
@@ -99,7 +124,8 @@ def preview_target():
         "preview": preview
     })
 
-# ---------------- TRAIN MODEL ----------------
+
+# ---------------- TRAIN ----------------
 @app.route("/train", methods=["POST"])
 def train_model():
     data = request.get_json()
@@ -109,10 +135,8 @@ def train_model():
     if not target or not dataset_id:
         return jsonify({"error": "target and dataset_id required"}), 400
 
-    tmp_file = tempfile.NamedTemporaryFile(delete=False)
-
     try:
-        # Download dataset from S3
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
         s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
         df = pd.read_csv(tmp_file.name, encoding="latin1")
     except Exception as e:
@@ -121,8 +145,9 @@ def train_model():
     if target not in df.columns:
         return jsonify({"error": "Invalid target column"}), 400
 
-    # 🔥 Reduce dataset size (avoid memory crash)
-    df = df.head(1000)
+    # 🔥 Prevent memory crash
+    if len(df) > 2000:
+        df = df.sample(1000, random_state=42)
 
     # Preprocess
     X_train, X_test, y_train, y_test, meta = preprocess(df, target)
@@ -135,7 +160,6 @@ def train_model():
     best_model_name = result["best_model_name"]
     best_params = result["best_params"]
 
-    # Leaderboard
     leaderboard = sorted(results, key=lambda x: x["test_score"], reverse=True)
 
     clean_leaderboard = []
@@ -149,16 +173,21 @@ def train_model():
             "fit_status": r["fit_status"]
         })
 
-    # 🔥 Save model to S3
     model_id = str(uuid.uuid4())
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_model:
-        joblib.dump(model, tmp_model.name)
-        s3.upload_file(tmp_model.name, BUCKET_NAME, f"models/{model_id}.pkl")
+    try:
+        # Save model
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_model:
+            joblib.dump(model, tmp_model.name)
+            s3.upload_file(tmp_model.name, BUCKET_NAME, f"models/{model_id}.pkl")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_meta:
-        joblib.dump(meta, tmp_meta.name)
-        s3.upload_file(tmp_meta.name, BUCKET_NAME, f"models/{model_id}_meta.pkl")
+        # Save meta
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_meta:
+            joblib.dump(meta, tmp_meta.name)
+            s3.upload_file(tmp_meta.name, BUCKET_NAME, f"models/{model_id}_meta.pkl")
+
+    except Exception as e:
+        return jsonify({"error": f"S3 upload failed: {str(e)}"}), 500
 
     return jsonify({
         "message": "Model trained successfully",
@@ -168,6 +197,7 @@ def train_model():
         "leaderboard": clean_leaderboard,
         "features": meta["columns"]
     })
+
 
 # ---------------- PREDICT ----------------
 @app.route("/predict", methods=["POST"])
@@ -217,6 +247,7 @@ def predict():
         "prediction": str(prediction[0]),
         "confidence": confidence
     })
+
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
