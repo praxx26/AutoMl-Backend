@@ -8,19 +8,21 @@ import uuid
 import tempfile
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
 from src.preprocessing import preprocess
 from src.modelfitting import train_best_model
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}},supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 print("🚀 AutoML API Running...")
+
+# ---------------- AWS CONFIG ----------------
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
+BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 
 s3 = boto3.client(
     "s3",
@@ -29,15 +31,12 @@ s3 = boto3.client(
     region_name=AWS_REGION
 )
 
-BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
-
-
+# ---------------- HOME ----------------
 @app.route("/")
 def home():
     return "AutoML API is working 🚀"
 
-
-# ---------------- UPLOAD ----------------
+# ---------------- UPLOAD DATASET ----------------
 @app.route("/upload", methods=["POST"])
 def upload_file():
     if 'file' not in request.files:
@@ -48,12 +47,18 @@ def upload_file():
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    os.makedirs("data", exist_ok=True)
+    dataset_id = str(uuid.uuid4())
+    filename = f"datasets/{dataset_id}.csv"
 
-    filepath = os.path.join("data", "uploaded.csv")
-    file.save(filepath)
+    # Save temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+        file.save(tmp.name)
 
-    df = pd.read_csv(filepath, encoding="latin1")
+        # Upload to S3
+        s3.upload_file(tmp.name, BUCKET_NAME, filename)
+
+        # Read preview
+        df = pd.read_csv(tmp.name, encoding="latin1")
 
     preview = {
         "columns": list(df.columns),
@@ -62,23 +67,28 @@ def upload_file():
 
     return jsonify({
         "message": "File uploaded successfully",
+        "dataset_id": dataset_id,
         "columns": list(df.columns),
         "preview": preview
     })
-
 
 # ---------------- TARGET PREVIEW ----------------
 @app.route("/preview-target", methods=["POST"])
 def preview_target():
     data = request.get_json()
     target = data.get("target")
+    dataset_id = data.get("dataset_id")
 
-    filepath = "data/uploaded.csv"
+    if not dataset_id:
+        return jsonify({"error": "dataset_id required"}), 400
 
-    if not os.path.exists(filepath):
-        return jsonify({"error": "No dataset uploaded"}), 400
+    tmp_file = tempfile.NamedTemporaryFile(delete=False)
 
-    df = pd.read_csv(filepath, encoding="latin1")
+    try:
+        s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
+        df = pd.read_csv(tmp_file.name, encoding="latin1")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     if target not in df.columns:
         return jsonify({"error": "Invalid target"}), 400
@@ -89,25 +99,30 @@ def preview_target():
         "preview": preview
     })
 
-
-# ---------------- TRAIN ----------------
+# ---------------- TRAIN MODEL ----------------
 @app.route("/train", methods=["POST"])
 def train_model():
     data = request.get_json()
     target = data.get("target")
+    dataset_id = data.get("dataset_id")
 
-    if not target:
-        return jsonify({"error": "Target column required"}), 400
+    if not target or not dataset_id:
+        return jsonify({"error": "target and dataset_id required"}), 400
 
-    filepath = "data/uploaded.csv"
+    tmp_file = tempfile.NamedTemporaryFile(delete=False)
 
-    if not os.path.exists(filepath):
-        return jsonify({"error": "No dataset uploaded"}), 400
-
-    df = pd.read_csv(filepath, encoding="latin1")
+    try:
+        # Download dataset from S3
+        s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
+        df = pd.read_csv(tmp_file.name, encoding="latin1")
+    except Exception as e:
+        return jsonify({"error": f"Dataset load failed: {str(e)}"}), 500
 
     if target not in df.columns:
         return jsonify({"error": "Invalid target column"}), 400
+
+    # 🔥 Reduce dataset size (avoid memory crash)
+    df = df.head(1000)
 
     # Preprocess
     X_train, X_test, y_train, y_test, meta = preprocess(df, target)
@@ -134,38 +149,30 @@ def train_model():
             "fit_status": r["fit_status"]
         })
 
-    # 🔥 SAVE MODEL TO S3
+    # 🔥 Save model to S3
     model_id = str(uuid.uuid4())
 
-    # Save model temp
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_model:
         joblib.dump(model, tmp_model.name)
-        model_path = tmp_model.name
+        s3.upload_file(tmp_model.name, BUCKET_NAME, f"models/{model_id}.pkl")
 
-    s3.upload_file(model_path, BUCKET_NAME, f"{model_id}.pkl")
-
-    # Save meta temp
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_meta:
         joblib.dump(meta, tmp_meta.name)
-        meta_path = tmp_meta.name
-
-    s3.upload_file(meta_path, BUCKET_NAME, f"{model_id}_meta.pkl")
+        s3.upload_file(tmp_meta.name, BUCKET_NAME, f"models/{model_id}_meta.pkl")
 
     return jsonify({
         "message": "Model trained successfully",
-        "model_id": model_id,   # 🔥 IMPORTANT
+        "model_id": model_id,
         "best_model": best_model_name,
         "best_params": best_params,
         "leaderboard": clean_leaderboard,
         "features": meta["columns"]
     })
 
-
 # ---------------- PREDICT ----------------
 @app.route("/predict", methods=["POST"])
 def predict():
     data = request.get_json()
-
     input_data = data.get("input", {})
     model_id = data.get("model_id")
 
@@ -173,12 +180,11 @@ def predict():
         return jsonify({"error": "model_id required"}), 400
 
     try:
-        # Download model from S3
-        model_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pkl")
-        meta_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pkl")
+        model_file = tempfile.NamedTemporaryFile(delete=False)
+        meta_file = tempfile.NamedTemporaryFile(delete=False)
 
-        s3.download_file(BUCKET_NAME, f"{model_id}.pkl", model_file.name)
-        s3.download_file(BUCKET_NAME, f"{model_id}_meta.pkl", meta_file.name)
+        s3.download_file(BUCKET_NAME, f"models/{model_id}.pkl", model_file.name)
+        s3.download_file(BUCKET_NAME, f"models/{model_id}_meta.pkl", meta_file.name)
 
         model = joblib.load(model_file.name)
         meta = joblib.load(meta_file.name)
@@ -212,6 +218,6 @@ def predict():
         "confidence": confidence
     })
 
-
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
