@@ -1,12 +1,14 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pandas as pd
 import boto3
 import uuid
-import os
+import joblib
+from flask import send_file, after_this_request
 import tempfile
 import zipfile
-import joblib
+import os
+
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -177,50 +179,77 @@ def predict():
 
 # ---------------- DOWNLOAD MODEL (ZIP) ----------------
 
+
 @app.route("/download-model/<model_id>", methods=["GET"])
 def download_model(model_id):
     try:
-        model_path = tempfile.mktemp(suffix=".pkl")
-        meta_path = tempfile.mktemp(suffix=".pkl")
-        zip_path = tempfile.mktemp(suffix=".zip")
+        # ---------------- STEP 1: CREATE TEMP FILES ----------------
+        model_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pkl")
+        meta_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pkl")
+        zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
 
-        # download from S3
+        model_path = model_tmp.name
+        meta_path = meta_tmp.name
+        zip_path = zip_tmp.name
+
+        model_tmp.close()
+        meta_tmp.close()
+        zip_tmp.close()
+
+        # ---------------- STEP 2: DOWNLOAD FROM S3 ----------------
         s3.download_file(BUCKET, f"models/{model_id}.pkl", model_path)
         s3.download_file(BUCKET, f"models/{model_id}_meta.pkl", meta_path)
 
-        # create zip
+        # ---------------- STEP 3: CREATE ZIP ----------------
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             zipf.write(model_path, "model.pkl")
             zipf.write(meta_path, "meta.pkl")
 
             zipf.writestr("README.txt", """
-HOW TO USE MODEL:
+===============================
+   AutoML Model Usage Guide
+===============================
 
-import joblib
+1. Install dependencies:
+   pip install joblib scikit-learn pandas
 
-model = joblib.load("model.pkl")
-meta_data = joblib.load("meta.pkl")
+2. Load model:
+   import joblib
+   model = joblib.load("model.pkl")
+   meta_data = joblib.load("meta.pkl")
 
-meta = meta_data["meta"]
-label_encoder = meta_data["label_encoder"]
+3. Preprocess input:
+   meta = meta_data["meta"]
+   X = meta["pipeline"].transform(input_df)
 
-# preprocess input
-X = meta["pipeline"].transform(input_df)
+4. Predict:
+   prediction = model.predict(X)
 
-prediction = model.predict(X)
-
-AutoML System 🚀
+--------------------------------
+Built with AutoML System 🚀
 """)
 
+        # ---------------- STEP 4: AUTO CLEANUP ----------------
+        @after_this_request
+        def cleanup(response):
+            try:
+                os.remove(model_path)
+                os.remove(meta_path)
+                os.remove(zip_path)
+            except Exception as e:
+                print("Cleanup error:", e)
+            return response
+
+        # ---------------- STEP 5: SEND FILE ----------------
         return send_file(
             zip_path,
             as_attachment=True,
-            download_name="model_bundle.zip"
+            download_name=f"{model_id}_model.zip",
+            mimetype="application/zip"
         )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        return {"error": str(e)}, 500
 # ---------------- RUN ----------------
 
 if __name__ == "__main__":
