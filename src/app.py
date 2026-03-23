@@ -15,7 +15,7 @@ from src.preprocessing import preprocess
 from src.modelfitting import train_best_model
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}},supports_credentials=True)
 
 print("🚀 AutoML API Running...")
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
