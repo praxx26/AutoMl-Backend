@@ -7,6 +7,9 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.svm import SVC, SVR
+from sklearn.svm import SVC, SVR, LinearSVC
+from sklearn.linear_model import SGDClassifier
+import psutil
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
 
 
@@ -163,6 +166,23 @@ def train_best_model(X_train, X_test, y_train, y_test):
         y_test = label_encoder.transform(y_test)
 
     if task == "classification":
+
+    # 🔥 Memory-aware SVM selection
+        available_memory = psutil.virtual_memory().available / (1024**2)  # MB
+
+        if available_memory < 500:
+            print("⚠️ Low memory → Using SGDClassifier instead of SVM")
+            svm_model = SGDClassifier(loss="hinge")
+            svm_params = {
+                "alpha": [0.0001, 0.001, 0.01]
+            }
+        else:
+            print("✅ Enough memory → Using LinearSVC (safe SVM)")
+            svm_model = LinearSVC(max_iter=5000)
+            svm_params = {
+                "C": [0.01, 0.1, 1, 10]
+            }
+
         models = {
             "Logistic Regression": (
                 LogisticRegression(max_iter=2000),
@@ -190,12 +210,33 @@ def train_best_model(X_train, X_test, y_train, y_test):
                 }
             ),
 
+            # 🔥 FIXED + OPTIMIZED SVM
             "SVM": (
-                SVC()
+                svm_model,
+                svm_params
             )
         }
 
     else:
+
+    # 🔥 Memory-aware SVR selection
+        available_memory = psutil.virtual_memory().available / (1024**2)  # MB
+
+        if available_memory < 500:
+            print("⚠️ Low memory → Using SGDRegressor instead of SVR")
+            from sklearn.linear_model import SGDRegressor
+            svr_model = SGDRegressor()
+            svr_params = {
+                "alpha": [0.0001, 0.001, 0.01]
+            }
+        else:
+            print("✅ Enough memory → Using SVR (safe)")
+            svr_model = SVR()
+            svr_params = {
+                "C": [0.1, 1, 10],
+                "kernel": ["linear"]
+            }
+
         models = {
             "Ridge": (
                 Ridge(),
@@ -223,8 +264,10 @@ def train_best_model(X_train, X_test, y_train, y_test):
                 }
             ),
 
+            # 🔥 FIXED SVR
             "SVR": (
-                SVR()
+                svr_model,
+                svr_params
             )
         }
 
