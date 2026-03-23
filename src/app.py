@@ -1,253 +1,227 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import pandas as pd
-import joblib
-import os
 import boto3
 import uuid
+import os
 import tempfile
-from dotenv import load_dotenv
+import zipfile
+import joblib
 
+from dotenv import load_dotenv
 load_dotenv()
 
 from src.preprocessing import preprocess
 from src.modelfitting import train_best_model
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
-
-print("🚀 AutoML API Running...")
+CORS(app)
 
 # ---------------- AWS CONFIG ----------------
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
-AWS_REGION = os.getenv("AWS_REGION")
-BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 
-print("AWS KEY:", AWS_ACCESS_KEY)
-print("AWS REGION:", AWS_REGION)
-print("BUCKET:", BUCKET_NAME)
+BUCKET = os.getenv("AWS_BUCKET_NAME")
 
 s3 = boto3.client(
     "s3",
-    aws_access_key_id=AWS_ACCESS_KEY,
-    aws_secret_access_key=AWS_SECRET_KEY,
-    region_name=AWS_REGION
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_KEY"),
+    region_name=os.getenv("AWS_REGION")
 )
 
+print("🚀 AutoML API Running...")
+
 # ---------------- HOME ----------------
+
 @app.route("/")
 def home():
-    return "AutoML API is working 🚀"
-
-
-# ---------------- TEST S3 ----------------
-@app.route("/test-s3")
-def test_s3():
-    try:
-        buckets = s3.list_buckets()
-        return jsonify({
-            "message": "✅ AWS Working",
-            "buckets": [b["Name"] for b in buckets["Buckets"]]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    return "API is working 🚀"
 
 # ---------------- UPLOAD ----------------
+
 @app.route("/upload", methods=["POST"])
 def upload_file():
-    print("🔥 Upload API hit")
-
-    if 'file' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    file = request.files['file']
-    print("📁 File:", file.filename)
-
-    if file.filename == "":
-        return jsonify({"error": "No selected file"}), 400
-
-    dataset_id = str(uuid.uuid4())
-    s3_key = f"datasets/{dataset_id}.csv"
-
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-            file.save(tmp.name)
+        file = request.files["file"]
 
-            print("⬆️ Uploading to S3...")
-            s3.upload_file(tmp.name, BUCKET_NAME, s3_key)
-            print("✅ Uploaded to S3")
+        dataset_id = str(uuid.uuid4())
 
-            df = pd.read_csv(tmp.name, encoding="latin1")
+        temp_path = tempfile.mktemp(suffix=".csv")
+        file.save(temp_path)
 
-    except Exception as e:
-        print("❌ S3 ERROR:", str(e))
-        return jsonify({"error": str(e)}), 500
+        # upload to S3
+        s3.upload_file(temp_path, BUCKET, f"datasets/{dataset_id}.csv")
 
-    preview = {
-        "columns": list(df.columns),
-        "rows": df.head(5).to_dict(orient="records")
-    }
+        df = pd.read_csv(temp_path, encoding="latin1")
 
-    return jsonify({
-        "message": "File uploaded successfully",
-        "dataset_id": dataset_id,
-        "columns": list(df.columns),
-        "preview": preview
-    })
-
-
-# ---------------- TARGET PREVIEW ----------------
-@app.route("/preview-target", methods=["POST"])
-def preview_target():
-    data = request.get_json()
-    target = data.get("target")
-    dataset_id = data.get("dataset_id")
-
-    if not dataset_id:
-        return jsonify({"error": "dataset_id required"}), 400
-
-    try:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False)
-        s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
-        df = pd.read_csv(tmp_file.name, encoding="latin1")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    if target not in df.columns:
-        return jsonify({"error": "Invalid target"}), 400
-
-    preview = df[target].head(10).tolist()
-
-    return jsonify({
-        "preview": preview
-    })
-
-
-# ---------------- TRAIN ----------------
-@app.route("/train", methods=["POST"])
-def train_model():
-    data = request.get_json()
-    target = data.get("target")
-    dataset_id = data.get("dataset_id")
-
-    if not target or not dataset_id:
-        return jsonify({"error": "target and dataset_id required"}), 400
-
-    try:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False)
-        s3.download_file(BUCKET_NAME, f"datasets/{dataset_id}.csv", tmp_file.name)
-        df = pd.read_csv(tmp_file.name, encoding="latin1")
-    except Exception as e:
-        return jsonify({"error": f"Dataset load failed: {str(e)}"}), 500
-
-    if target not in df.columns:
-        return jsonify({"error": "Invalid target column"}), 400
-
-    # 🔥 Prevent memory crash
-    if len(df) > 2000:
-        df = df.sample(1000, random_state=42)
-
-    # Preprocess
-    X_train, X_test, y_train, y_test, meta = preprocess(df, target)
-
-    # Train
-    result = train_best_model(X_train, X_test, y_train, y_test)
-
-    model = result["model"]
-    results = result["all_results"]
-    best_model_name = result["best_model_name"]
-    best_params = result["best_params"]
-
-    leaderboard = sorted(results, key=lambda x: x["test_score"], reverse=True)
-
-    clean_leaderboard = []
-    for r in leaderboard:
-        clean_leaderboard.append({
-            "model": r["name"],
-            "train_score": float(r["train_score"]),
-            "test_score": float(r["test_score"]),
-            "cv_score": float(r["cv_score"]),
-            "params": r["params"],
-            "fit_status": r["fit_status"]
+        return jsonify({
+            "message": "File uploaded successfully",
+            "dataset_id": dataset_id,
+            "columns": df.columns.tolist(),
+            "preview": {
+                "columns": df.columns.tolist(),
+                "rows": df.head(5).to_dict(orient="records")
+            }
         })
 
-    model_id = str(uuid.uuid4())
-
-    try:
-        # Save model
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_model:
-            joblib.dump(model, tmp_model.name)
-            s3.upload_file(tmp_model.name, BUCKET_NAME, f"models/{model_id}.pkl")
-
-        # Save meta
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp_meta:
-            joblib.dump(meta, tmp_meta.name)
-            s3.upload_file(tmp_meta.name, BUCKET_NAME, f"models/{model_id}_meta.pkl")
-
     except Exception as e:
-        return jsonify({"error": f"S3 upload failed: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
-    return jsonify({
-        "message": "Model trained successfully",
-        "model_id": model_id,
-        "best_model": best_model_name,
-        "best_params": best_params,
-        "leaderboard": clean_leaderboard,
-        "features": meta["columns"]
-    })
+# ---------------- PREVIEW TARGET ----------------
 
-
-# ---------------- PREDICT ----------------
-@app.route("/predict", methods=["POST"])
-def predict():
-    data = request.get_json()
-    input_data = data.get("input", {})
-    model_id = data.get("model_id")
-
-    if not model_id:
-        return jsonify({"error": "model_id required"}), 400
-
+@app.route("/preview-target", methods=["POST"])
+def preview_target():
     try:
-        model_file = tempfile.NamedTemporaryFile(delete=False)
-        meta_file = tempfile.NamedTemporaryFile(delete=False)
+        data = request.json
+        dataset_id = data["dataset_id"]
+        target = data["target"]
 
-        s3.download_file(BUCKET_NAME, f"models/{model_id}.pkl", model_file.name)
-        s3.download_file(BUCKET_NAME, f"models/{model_id}_meta.pkl", meta_file.name)
+        temp_path = tempfile.mktemp(suffix=".csv")
 
-        model = joblib.load(model_file.name)
-        meta = joblib.load(meta_file.name)
+        s3.download_file(BUCKET, f"datasets/{dataset_id}.csv", temp_path)
 
-    except Exception as e:
-        return jsonify({"error": f"Model load failed: {str(e)}"}), 500
+        df = pd.read_csv(temp_path, encoding="latin1")
 
-    features = meta["columns"]
-
-    input_df = pd.DataFrame([input_data])
-
-    for col in features:
-        if col not in input_df:
-            input_df[col] = 0
-
-    input_df = input_df[features]
-
-    try:
-        prediction = model.predict(input_df)
-
-        confidence = None
-        if hasattr(model, "predict_proba"):
-            probs = model.predict_proba(input_df)
-            confidence = float(max(probs[0]))
+        return jsonify({
+            "target": target,
+            "unique_values": df[target].unique().tolist()[:10]
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify({
-        "prediction": str(prediction[0]),
-        "confidence": confidence
-    })
+# ---------------- TRAIN ----------------
 
+@app.route("/train", methods=["POST"])
+def train():
+    try:
+        data = request.json
+        dataset_id = data["dataset_id"]
+        target = data["target"]
+
+        temp_path = tempfile.mktemp(suffix=".csv")
+
+        s3.download_file(BUCKET, f"datasets/{dataset_id}.csv", temp_path)
+
+        df = pd.read_csv(temp_path, encoding="latin1")
+
+        X_train, X_test, y_train, y_test, meta = preprocess(df, target)
+
+        result = train_best_model(X_train, X_test, y_train, y_test)
+
+        model = result["model"]
+        label_encoder = result["label_encoder"]
+
+        model_id = dataset_id
+
+        # save
+        model_path = f"{model_id}.pkl"
+        meta_path = f"{model_id}_meta.pkl"
+
+        joblib.dump(model, model_path)
+        joblib.dump({
+            "meta": meta,
+            "label_encoder": label_encoder
+        }, meta_path)
+
+        # upload to S3
+        s3.upload_file(model_path, BUCKET, f"models/{model_id}.pkl")
+        s3.upload_file(meta_path, BUCKET, f"models/{model_id}_meta.pkl")
+
+        return jsonify({
+            "message": "Training complete",
+            "model_id": model_id,
+            "best_model": result["best_model_name"],
+            "params": result["best_params"]
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------- PREDICT ----------------
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    try:
+        data = request.json
+        model_id = data["model_id"]
+        input_data = data["input"]
+
+        model_path = tempfile.mktemp(suffix=".pkl")
+        meta_path = tempfile.mktemp(suffix=".pkl")
+
+        s3.download_file(BUCKET, f"models/{model_id}.pkl", model_path)
+        s3.download_file(BUCKET, f"models/{model_id}_meta.pkl", meta_path)
+
+        model = joblib.load(model_path)
+        meta_data = joblib.load(meta_path)
+
+        meta = meta_data["meta"]
+        label_encoder = meta_data["label_encoder"]
+
+        df = pd.DataFrame([input_data])
+
+        # 🔥 apply preprocessing
+        X = meta["pipeline"].transform(df)
+
+        prediction = model.predict(X)
+
+        if label_encoder:
+            prediction = label_encoder.inverse_transform(prediction)
+
+        return jsonify({
+            "prediction": prediction.tolist()
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------- DOWNLOAD MODEL (ZIP) ----------------
+
+@app.route("/download-model/<model_id>", methods=["GET"])
+def download_model(model_id):
+    try:
+        model_path = tempfile.mktemp(suffix=".pkl")
+        meta_path = tempfile.mktemp(suffix=".pkl")
+        zip_path = tempfile.mktemp(suffix=".zip")
+
+        # download from S3
+        s3.download_file(BUCKET, f"models/{model_id}.pkl", model_path)
+        s3.download_file(BUCKET, f"models/{model_id}_meta.pkl", meta_path)
+
+        # create zip
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            zipf.write(model_path, "model.pkl")
+            zipf.write(meta_path, "meta.pkl")
+
+            zipf.writestr("README.txt", """
+HOW TO USE MODEL:
+
+import joblib
+
+model = joblib.load("model.pkl")
+meta_data = joblib.load("meta.pkl")
+
+meta = meta_data["meta"]
+label_encoder = meta_data["label_encoder"]
+
+# preprocess input
+X = meta["pipeline"].transform(input_df)
+
+prediction = model.predict(X)
+
+AutoML System 🚀
+""")
+
+        return send_file(
+            zip_path,
+            as_attachment=True,
+            download_name="model_bundle.zip"
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------- RUN ----------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=10000, debug=True)
