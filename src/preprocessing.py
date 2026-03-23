@@ -6,6 +6,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import StandardScaler
 
+# 🔥 NEW IMPORTS (ADDED)
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.decomposition import PCA
+
 
 def clean_text(text):
     text = str(text).lower()
@@ -26,7 +30,6 @@ def detect_text_columns(X):
 
 
 def drop_id_columns(X_train, X_test):
-
     id_cols = [col for col in X_train.columns if 'id' in col.lower() or 'unnamed' in col.lower()]
 
     print("🗑️ Dropping ID columns:", id_cols)
@@ -51,7 +54,6 @@ def handle_missing(X_train, X_test):
 
 
 def handle_outliers(X_train, X_test):
-
     numeric_cols = X_train.select_dtypes(include=['int64', 'float64']).columns
 
     for col in numeric_cols:
@@ -69,7 +71,6 @@ def handle_outliers(X_train, X_test):
 
 
 def encode_categorical(X_train, X_test):
-
     cat_cols = X_train.select_dtypes(include=['object']).columns
 
     if len(cat_cols) == 0:
@@ -96,8 +97,9 @@ def process_text(X_train, X_test, text_cols):
     train_text = train_text.apply(clean_text)
     test_text = test_text.apply(clean_text)
 
+    # 🔥 UPDATED (only change: reduced max_features)
     vectorizer = TfidfVectorizer(
-        max_features=5000,
+        max_features=300,   # 🔥 reduced from 5000 → prevents memory crash
         stop_words="english"
     )
 
@@ -189,6 +191,26 @@ def preprocess(df, target_col):
         X_test = scaler.transform(X_test)
 
         print("✅ Numeric processed:", X_train.shape)
+
+    # 🔥 NEW LOGIC (ADDED — no existing code changed)
+
+    if X_train.shape[1] > 500:
+        print("⚠️ Too many features → applying VarianceThreshold")
+
+        selector = VarianceThreshold(threshold=0.01)
+        X_train = selector.fit_transform(X_train)
+        X_test = selector.transform(X_test)
+
+        print("✅ After VarianceThreshold:", X_train.shape)
+
+    if X_train.shape[1] > 300:
+        print("⚠️ Still high → applying PCA")
+
+        pca = PCA(n_components=100)
+        X_train = pca.fit_transform(X_train)
+        X_test = pca.transform(X_test)
+
+        print("✅ After PCA:", X_train.shape)
 
     if X_train.shape[1] < 2:
         raise ValueError("❌ Too many columns removed! Check preprocessing.")
