@@ -191,8 +191,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
             ),
 
             "SVM": (
-                SVC(),
-                {"C": [0.1, 1, 10], "kernel": ["rbf", "linear"]}
+                SVC()
             )
         }
 
@@ -225,8 +224,7 @@ def train_best_model(X_train, X_test, y_train, y_test):
             ),
 
             "SVR": (
-                SVR(),
-                {"C": [0.1, 1, 10]}
+                SVR()
             )
         }
 
