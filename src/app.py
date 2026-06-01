@@ -478,31 +478,78 @@ def predict():
         try:
             # Try SHAP for local explanation
             bg_data = meta.get("background_data")
-            if bg_data is not None:
-                # Use model.predict to support any algorithm (KNN, SVM, etc.)
-                explainer = shap.Explainer(base_model.predict, bg_data)
-            else:
-                explainer = shap.Explainer(base_model)
+            model_class_name = base_model.__class__.__name__
+            print(f"SHAP explanation requested for model type: {model_class_name}")
+            
+            vals = None
+            
+            if "Forest" in model_class_name or "Boosting" in model_class_name or "Tree" in model_class_name:
+                # Optimized TreeExplainer for Tree-based models (uses virtually zero memory and is extremely fast)
+                print(f"Using optimized TreeExplainer for {model_class_name}")
+                explainer = shap.TreeExplainer(base_model)
+                shap_values = explainer.shap_values(input_processed)
                 
-            shap_values = explainer(input_processed)
-            vals = shap_values.values[0]
-            
-            # Handle multi-class explanations or shap arrays
-            if len(vals.shape) > 1:
-                pred_class = int(prediction.tolist()[0] if hasattr(prediction, "tolist") else prediction)
-                if pred_class < vals.shape[1]:
-                    vals = vals[:, pred_class]
+                if isinstance(shap_values, list):
+                    pred_class = int(prediction.tolist()[0] if hasattr(prediction, "tolist") else prediction)
+                    if pred_class < len(shap_values):
+                        vals = shap_values[pred_class][0]
+                    else:
+                        vals = shap_values[0][0]
                 else:
-                    vals = vals[:, 0]
+                    if len(shap_values.shape) > 2:
+                        pred_class = int(prediction.tolist()[0] if hasattr(prediction, "tolist") else prediction)
+                        if pred_class < shap_values.shape[2]:
+                            vals = shap_values[0, :, pred_class]
+                        else:
+                            vals = shap_values[0, :, 0]
+                    elif len(shap_values.shape) == 2:
+                        vals = shap_values[0]
+                    else:
+                        vals = shap_values
+            elif "Logistic" in model_class_name or "Linear" in model_class_name or "Ridge" in model_class_name:
+                # Optimized LinearExplainer for linear models
+                print(f"Using optimized LinearExplainer for {model_class_name}")
+                if bg_data is not None:
+                    bg_sample = bg_data[:10] if len(bg_data) > 10 else bg_data
+                    explainer = shap.LinearExplainer(base_model, bg_sample)
+                else:
+                    explainer = shap.LinearExplainer(base_model, None)
+                shap_values = explainer.shap_values(input_processed)
+                if len(shap_values.shape) > 1:
+                    vals = shap_values[0]
+                else:
+                    vals = shap_values
+            else:
+                # For non-tree/non-linear models (SVM, KNN, etc.), use KernelExplainer with a very small background sample to avoid OOM
+                print(f"Using KernelExplainer for {model_class_name} with sample limit")
+                if bg_data is not None:
+                    bg_sample = bg_data[:3] if len(bg_data) > 3 else bg_data
+                    explainer = shap.KernelExplainer(base_model.predict, bg_sample)
+                    shap_values = explainer.shap_values(input_processed)
+                    if isinstance(shap_values, list):
+                        pred_class = int(prediction.tolist()[0] if hasattr(prediction, "tolist") else prediction)
+                        if pred_class < len(shap_values):
+                            vals = shap_values[pred_class][0]
+                        else:
+                            vals = shap_values[0][0]
+                    elif len(shap_values.shape) > 1:
+                        vals = shap_values[0]
+                    else:
+                        vals = shap_values
+                else:
+                    raise Exception("No background data available for KernelExplainer")
             
-            top_idx = np.argsort(np.abs(vals))[::-1]
-            for idx in top_idx:
-                if idx < len(features):
-                    insights.append({
-                        "feature": features[idx], 
-                        "importance": float(vals[idx]),
-                        "type": "local"
-                    })
+            if vals is not None:
+                top_idx = np.argsort(np.abs(vals))[::-1]
+                for idx in top_idx:
+                    if idx < len(features):
+                        insights.append({
+                            "feature": features[idx], 
+                            "importance": float(vals[idx]),
+                            "type": "local"
+                        })
+            else:
+                raise Exception("SHAP explanation returned None values")
         except Exception as shap_e:
             print("SHAP explainer failed, falling back to global:", shap_e)
             # Fallback to global feature importances
