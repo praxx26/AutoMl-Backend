@@ -62,10 +62,10 @@ except:
 if label_encoder:
     joblib.dump(label_encoder, "models/label_encoder.pkl")
 
-print("✅ Training completed and models saved")
+print(" Training completed and models saved")
 
 
-print("\n📊 Model Performance:\n")
+print("\n Model Performance:\n")
 
 if dtype == 'classification':
     print("Accuracy :", ass(y_test, y_pred))

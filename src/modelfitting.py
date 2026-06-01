@@ -17,7 +17,7 @@ def process_model(name, model, param_grid,
                   X_train, X_test, y_train, y_test,
                   task, cv_splits, n_iter):
 
-    print(f"\n🚀 Training {name}...")
+    print(f"\n Training {name}...")
 
     if task == "classification":
         cv = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=42)
@@ -51,17 +51,17 @@ def process_model(name, model, param_grid,
     else:
         fit_status = "Good Fit"
 
-    print(f"📊 {name} → {fit_status}")
+    print(f" {name} -> {fit_status}")
 
     if fit_status != "Good Fit":
 
-        print(f"⚠️ Adjusting {name}...")
+        print(f" Adjusting {name}...")
 
         new_params = param_grid.copy()
 
     if fit_status == "Overfitting":
 
-        print("⚠️ Fixing Overfitting...")
+        print(" Fixing Overfitting...")
 
         if "max_depth" in new_params:
             new_params["max_depth"] = [3, 5, 10]
@@ -85,7 +85,7 @@ def process_model(name, model, param_grid,
 
     elif fit_status == "Underfitting":
 
-        print("⚠️ Fixing Underfitting...")
+        print(" Fixing Underfitting...")
 
    
         if "max_depth" in new_params:
@@ -110,7 +110,7 @@ def process_model(name, model, param_grid,
         if "n_neighbors" in new_params:
             new_params["n_neighbors"] = [3, 5]
 
-        print(f"🔄 Retuning {name} with adjusted params...")
+        print(f" Retuning {name} with adjusted params...")
 
         grid = RandomizedSearchCV(
             model,
@@ -137,7 +137,7 @@ def process_model(name, model, param_grid,
         else:
             fit_status = "Good Fit"
 
-        print(f"✅ After tuning → {fit_status}")
+        print(f" After tuning -> {fit_status}")
 
     return {
         "name": name,
@@ -151,33 +151,45 @@ def process_model(name, model, param_grid,
 
 
 def train_best_model(X_train, X_test, y_train, y_test):
+    process_log = []
 
     if y_train.dtype == "object" or len(np.unique(y_train)) <= 10:
         task = "classification"
     else:
         task = "regression"
+    
+    process_log.append({
+        "step": f"Task detected as {task.capitalize()}",
+        "details": [
+            f"Unique target values: {len(np.unique(y_train)) if len(np.unique(y_train)) <= 10 else '> 10'}",
+            f"Target dtype: {y_train.dtype}"
+        ]
+    })
 
-    print("🔍 Detected Task:", task)
+    print(" Detected Task:", task)
 
     label_encoder = None
     if task == "classification" and y_train.dtype == "object":
         label_encoder = LabelEncoder()
         y_train = label_encoder.fit_transform(y_train)
         y_test = label_encoder.transform(y_test)
+        process_log.append({
+            "step": "Target column label encoded",
+            "details": ["Converted string target labels into numeric classes"]
+        })
 
     if task == "classification":
 
-    # 🔥 Memory-aware SVM selection
-        available_memory = psutil.virtual_memory().available / (1024**2)  # MB
+        available_memory = psutil.virtual_memory().available / (1024**2) 
 
         if available_memory < 500:
-            print("⚠️ Low memory → Using SGDClassifier instead of SVM")
+            print(" Low memory -> Using SGDClassifier instead of SVM")
             svm_model = SGDClassifier(loss="hinge")
             svm_params = {
                 "alpha": [0.0001, 0.001, 0.01]
             }
         else:
-            print("✅ Enough memory → Using LinearSVC (safe SVM)")
+            print(" Enough memory -> Using LinearSVC (safe SVM)")
             svm_model = LinearSVC(max_iter=5000)
             svm_params = {
                 "C": [0.01, 0.1, 1, 10]
@@ -210,7 +222,6 @@ def train_best_model(X_train, X_test, y_train, y_test):
                 }
             ),
 
-            # 🔥 FIXED + OPTIMIZED SVM
             "SVM": (
                 svm_model,
                 svm_params
@@ -219,18 +230,17 @@ def train_best_model(X_train, X_test, y_train, y_test):
 
     else:
 
-    # 🔥 Memory-aware SVR selection
-        available_memory = psutil.virtual_memory().available / (1024**2)  # MB
+        available_memory = psutil.virtual_memory().available / (1024**2) 
 
         if available_memory < 500:
-            print("⚠️ Low memory → Using SGDRegressor instead of SVR")
+            print(" Low memory -> Using SGDRegressor instead of SVR")
             from sklearn.linear_model import SGDRegressor
             svr_model = SGDRegressor()
             svr_params = {
                 "alpha": [0.0001, 0.001, 0.01]
             }
         else:
-            print("✅ Enough memory → Using SVR (safe)")
+            print(" Enough memory -> Using SVR (safe)")
             svr_model = SVR()
             svr_params = {
                 "C": [0.1, 1, 10],
@@ -264,12 +274,24 @@ def train_best_model(X_train, X_test, y_train, y_test):
                 }
             ),
 
-            # 🔥 FIXED SVR
             "SVR": (
                 svr_model,
                 svr_params
             )
         }
+
+    process_log.append({
+        "step": "Models selected based on system memory",
+        "details": [
+            f"Available memory: {available_memory:.2f} MB",
+            f"Selected SVM algorithm: {'SGD' if available_memory < 500 else 'Standard SVM'}",
+            f"Models queued for training: {list(models.keys())}"
+        ]
+    })
+    process_log.append({
+        "step": "Model training and hyperparameter tuning initiated",
+        "details": ["Searching hyperparameter grid using RandomizedSearchCV (cv=3)"]
+    })
 
     results = Parallel(n_jobs=1)(
         delayed(process_model)(
@@ -279,11 +301,24 @@ def train_best_model(X_train, X_test, y_train, y_test):
         )
         for name, (model, params) in models.items()
     )
+    eval_details = [f"{r['name']}: Test Score = {r['test_score']:.4f} ({r['fit_status']})" for r in results]
+    process_log.append({
+        "step": "Models evaluated and retuned if necessary",
+        "details": eval_details
+    })
 
     best_result = max(results, key=lambda x: x["test_score"])
+    process_log.append({
+        "step": f"Best model selected: {best_result['name']}",
+        "details": [
+            f"Test Score: {best_result['test_score']:.4f}",
+            f"CV Score: {best_result['cv_score']:.4f}",
+            f"Best parameters: {best_result['params']}"
+        ]
+    })
 
     print("\n==============================")
-    print("🏆 BEST MODEL:", best_result["name"])
+    print(" BEST MODEL:", best_result["name"])
     print("Test Score:", best_result["test_score"])
     print("CV Score:", best_result["cv_score"])
     print("Train Score:", best_result["train_score"])
@@ -295,5 +330,6 @@ def train_best_model(X_train, X_test, y_train, y_test):
     "best_model_name": best_result["name"],  
     "best_params": best_result["params"],    
     "label_encoder": label_encoder,
-    "all_results": results
+    "all_results": results,
+    "process_log": process_log
     }
