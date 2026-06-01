@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import sys
+import os
+# Add the directory containing app.py to sys.path so that imports of preprocessing/modelfitting work
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from preprocessing import preprocess
 from modelfitting import train_best_model
 
