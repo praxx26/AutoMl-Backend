@@ -14,8 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.preprocessing import preprocess
-from src.modelfitting import train_best_model
+from .preprocessing import preprocess
+from .modelfitting import train_best_model
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
