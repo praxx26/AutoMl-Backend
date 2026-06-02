@@ -285,28 +285,6 @@ def preprocess(df, target_col):
             ]
         })
 
-    if X_train.shape[1] > 500:
-        selector = VarianceThreshold(threshold=0.01)
-        X_train = selector.fit_transform(X_train)
-        X_test = selector.transform(X_test)
-        process_log.append({
-            "step": "Variance threshold applied",
-            "details": [
-                "Threshold: 0.01",
-                f"Features remaining: {X_train.shape[1]}"
-            ]
-        })
-
-    if X_train.shape[1] > 300:
-        pca = PCA(n_components=100)
-        X_train = pca.fit_transform(X_train)
-        X_test = pca.transform(X_test)
-        process_log.append({
-            "step": "PCA applied for dimensionality reduction",
-            "details": [
-                "Reduced to: 100 components"
-            ]
-        })
 
     if X_train.shape[1] < 2:
         raise ValueError(" Too many columns removed! Check preprocessing.")
