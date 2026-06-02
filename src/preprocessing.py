@@ -29,7 +29,13 @@ def detect_text_columns(X):
 
 
 def drop_id_columns(X_train, X_test):
-    id_cols = [col for col in X_train.columns if 'id' in col.lower() or 'unnamed' in col.lower()]
+    id_cols = [
+        col for col in X_train.columns
+        if col.lower() == 'id' 
+        or col.lower().startswith('id_') 
+        or col.lower().endswith('_id') 
+        or 'unnamed' in col.lower()
+    ]
 
     print(" Dropping ID columns:", id_cols)
 
