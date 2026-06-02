@@ -23,7 +23,7 @@ from preprocessing import preprocess
 from modelfitting import train_best_model
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 print(" AutoML API Running...")
 
