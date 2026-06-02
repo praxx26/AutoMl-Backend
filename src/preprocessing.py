@@ -8,8 +8,9 @@ from sklearn.preprocessing import StandardScaler
 
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.decomposition import PCA
+import logging
 
-
+logger = logging.getLogger(__name__)
 def clean_text(text):
     text = str(text).lower()
     text = re.sub(r'\d+', ' ', text)
@@ -36,9 +37,7 @@ def drop_id_columns(X_train, X_test):
         or col.lower().endswith('_id') 
         or 'unnamed' in col.lower()
     ]
-
-    print(" Dropping ID columns:", id_cols)
-
+    logger.info(f" Dropping ID columns: {id_cols}")
     X_train = X_train.drop(columns=id_cols, errors='ignore')
     X_test = X_test.drop(columns=id_cols, errors='ignore')
 
@@ -163,7 +162,7 @@ def process_text(X_train, X_test, text_cols):
 def preprocess(df, target_col):
     process_log = []
 
-    print(" Original columns:", list(df.columns))
+    logger.info(f"Original columns: {list(df.columns)}")
 
     # Drop rows where the target is missing
     df = df.dropna(subset=[target_col])
@@ -179,7 +178,7 @@ def preprocess(df, target_col):
         ]
     })
 
-    print(" Original shape:", X.shape)
+    logger.info(f"Original shape: {X.shape}")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -194,7 +193,7 @@ def preprocess(df, target_col):
         ]
     })
 
-    print("After split:", X_train.shape)
+    logger.info(f"After split: {X_train.shape}")
 
     X_train, X_test, dropped_id_cols = drop_id_columns(X_train, X_test)
     if dropped_id_cols:
@@ -219,7 +218,7 @@ def preprocess(df, target_col):
             categorical_values[col] = list(X_train[col].dropna().unique())
 
     text_cols = detect_text_columns(X_train)
-    print(" Text columns:", text_cols)
+    logger.info(f"Text columns: {text_cols}")
 
     vectorizer = None
     scaler = None

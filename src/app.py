@@ -11,6 +11,14 @@ import shap
 import numpy as np
 import tempfile
 from dotenv import load_dotenv
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -25,16 +33,15 @@ from modelfitting import train_best_model
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-print(" AutoML API Running...")
+logger.info("AutoML API Initializing...")
 
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
 BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 
-print("AWS KEY:", AWS_ACCESS_KEY)
-print("AWS REGION:", AWS_REGION)
-print("BUCKET:", BUCKET_NAME)
+logger.info(f"AWS REGION configured: {AWS_REGION}")
+logger.info(f"S3 BUCKET configured: {BUCKET_NAME}")
 
 s3 = boto3.client(
     "s3",
@@ -42,6 +49,7 @@ s3 = boto3.client(
     aws_secret_access_key=AWS_SECRET_KEY,
     region_name=AWS_REGION
 )
+logger.info("S3 Client Initialized.")
 
 model_cache = {}
 meta_cache = {}
@@ -405,17 +413,20 @@ def predict():
     input_data = data.get("input", {})
     model_id = data.get("model_id")
 
+    logger.info(f"Received prediction request for model_id: {model_id}")
+
     if not model_id:
+        logger.warning("predict route called without model_id")
         return jsonify({"error": "model_id required"}), 400
 
     try:
         if model_id in model_cache:
             model = model_cache[model_id]
             meta = meta_cache[model_id]
-            print(" Loaded from cache")
+            logger.info("Model loaded from cache successfully")
 
         else:
-            print("⬇ Downloading model from S3...")
+            logger.info(f"Downloading model {model_id} from S3...")
 
             model_file = tempfile.NamedTemporaryFile(delete=False)
             meta_file = tempfile.NamedTemporaryFile(delete=False)
@@ -428,6 +439,7 @@ def predict():
 
             s3.download_file(BUCKET_NAME, f"models/{model_id}.pkl", model_path)
             s3.download_file(BUCKET_NAME, f"models/{model_id}_meta.pkl", meta_path)
+            logger.info("Model artifacts downloaded from S3, loading into memory...")
 
             model = joblib.load(model_path)
             meta = joblib.load(meta_path)
@@ -435,9 +447,10 @@ def predict():
             model_cache[model_id] = model
             meta_cache[model_id] = meta
 
-            print(" Model loaded and cached")
+            logger.info("Model loaded and cached successfully")
 
     except Exception as e:
+        logger.error(f"Model load failed: {str(e)}")
         return jsonify({"error": f"Model load failed: {str(e)}"}), 500
 
     features = meta["columns"]
@@ -445,12 +458,13 @@ def predict():
     input_df = pd.get_dummies(input_df)
     input_df = input_df.reindex(columns=features, fill_value=0)
 
+    logger.info("Applying preprocessing to input data...")
     input_processed = input_df.values
     if meta.get("scaler"):
         try:
             input_processed = meta["scaler"].transform(input_df)
         except Exception as e:
-            print("Scaler transform failed:", e)
+            logger.error(f"Scaler transform failed: {e}")
 
     # If the model uses text features, process and append them
     if meta.get("vectorizer") and meta.get("text_cols"):
@@ -463,7 +477,9 @@ def predict():
         input_processed = np.hstack([input_processed, text_features])
 
     try:
+        logger.info("Executing model prediction...")
         prediction = model.predict(input_processed)
+        logger.info(f"Prediction successful: {prediction}")
 
         confidence = None
         if hasattr(model, "predict_proba"):
